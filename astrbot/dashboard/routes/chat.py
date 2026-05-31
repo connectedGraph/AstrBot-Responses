@@ -152,6 +152,7 @@ class ChatRoute(Route):
 
         async def stream():
             client_disconnected = False
+            streamed_trace_parts = []
 
             try:
                 async with track_conversation(self.running_convs, webchat_conv_id):
@@ -169,7 +170,12 @@ class ChatRoute(Route):
                         if not result:
                             continue
 
-                        result_text = result["data"]
+                        result_data = result["data"]
+                        result_text = (
+                            result_data
+                            if isinstance(result_data, str)
+                            else json.dumps(result_data, ensure_ascii=False)
+                        )
                         type = result.get("type")
                         streaming = result.get("streaming", False)
 
@@ -192,13 +198,46 @@ class ChatRoute(Route):
 
                         if type == "end":
                             break
-                        elif (
-                            (streaming and type == "complete")
-                            or not streaming
-                            or type == "break"
+                        elif streaming and type == "complete":
+                            if result_text or streamed_trace_parts:
+                                new_his = {"type": "bot", "message": result_text}
+                                if streamed_trace_parts:
+                                    new_his["parts"] = streamed_trace_parts
+                                await self.platform_history_mgr.insert(
+                                    platform_id="webchat",
+                                    user_id=webchat_conv_id,
+                                    content=new_his,
+                                    sender_id="bot",
+                                    sender_name="bot",
+                                )
+                        elif streaming and type in (
+                            "tool_call",
+                            "tool_call_result",
+                            "reasoning",
                         ):
+                            streamed_trace_parts.append(
+                                {
+                                    "type": type,
+                                    "data": result_data,
+                                    "chain_type": result.get("chain_type"),
+                                }
+                            )
+                        elif not streaming or type == "break":
                             # append bot message
-                            new_his = {"type": "bot", "message": result_text}
+                            if type in ("tool_call", "tool_call_result", "reasoning"):
+                                new_his = {
+                                    "type": "bot",
+                                    "message": "",
+                                    "parts": [
+                                        {
+                                            "type": type,
+                                            "data": result_data,
+                                            "chain_type": result.get("chain_type"),
+                                        }
+                                    ],
+                                }
+                            else:
+                                new_his = {"type": "bot", "message": result_text}
                             await self.platform_history_mgr.insert(
                                 platform_id="webchat",
                                 user_id=webchat_conv_id,

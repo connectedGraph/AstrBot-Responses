@@ -499,6 +499,7 @@ export default {
                             type: 'bot',
                             message: this.extractTextFromContent(msg.content),
                             embedded_images: this.extractImagesFromContent(msg.content),
+                            parts: msg.content?.parts || [],
                         }
                     };
                 }

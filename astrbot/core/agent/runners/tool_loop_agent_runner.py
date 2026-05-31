@@ -1,6 +1,7 @@
 import sys
 import traceback
 import typing as T
+import time
 from .base import BaseAgentRunner, AgentResponse, AgentState
 from ..hooks import BaseAgentRunHooks
 from ..tool_executor import BaseFunctionToolExecutor
@@ -10,6 +11,7 @@ from astrbot.core.provider.provider import Provider
 from astrbot.core.message.message_event_result import (
     MessageChain,
 )
+from astrbot.core.message.components import Json, Plain
 from astrbot.core.provider.entities import (
     ProviderRequest,
     LLMResponse,
@@ -59,6 +61,88 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
             logger.debug(f"Agent state transition: {self._state} -> {new_state}")
             self._state = new_state
 
+    @staticmethod
+    def _trace_chain_response_type(chain: MessageChain) -> str:
+        if chain.type == "tool_direct_result":
+            return "tool_call_result"
+        return chain.type or "streaming_delta"
+
+    def _agent_responses_from_trace_chains(
+        self, llm_response: LLMResponse
+    ) -> T.Iterator[AgentResponse]:
+        for chain in getattr(llm_response, "trace_chains", []) or []:
+            if chain is None:
+                continue
+            yield AgentResponse(
+                type=self._trace_chain_response_type(chain),
+                data=AgentResponseData(chain=chain),
+            )
+
+    @staticmethod
+    def _tool_schema_for(
+        req: ProviderRequest, tool_name: str
+    ) -> tuple[str | None, dict | None]:
+        if not req.func_tool:
+            return None, None
+        func_tool = req.func_tool.get_func(tool_name)
+        if not func_tool:
+            return None, None
+        return func_tool.description, func_tool.parameters
+
+    def _tool_call_chain(
+        self,
+        req: ProviderRequest,
+        tool_name: str,
+        tool_args: dict,
+        tool_call_id: str,
+        status: str = "in_progress",
+    ) -> MessageChain:
+        description, schema = self._tool_schema_for(req, tool_name)
+        return MessageChain(
+            type="tool_call",
+            chain=[
+                Json(
+                    data={
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "status": status,
+                        "ts": time.time(),
+                        "description": description,
+                        "schema": schema,
+                    }
+                ),
+                Plain(f"🔨 调用工具: {tool_name}"),
+            ],
+        )
+
+    def _tool_result_chain(
+        self,
+        req: ProviderRequest,
+        tool_name: str,
+        tool_call_id: str,
+        content: str,
+        status: str = "completed",
+    ) -> MessageChain:
+        description, schema = self._tool_schema_for(req, tool_name)
+        return MessageChain(
+            type="tool_call_result",
+            chain=[
+                Json(
+                    data={
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "status": status,
+                        "ts": time.time(),
+                        "result": content,
+                        "description": description,
+                        "schema": schema,
+                    }
+                ),
+                Plain(content),
+            ],
+        )
+
     async def _iter_llm_responses(self) -> T.AsyncGenerator[LLMResponse, None]:
         """Yields chunks *and* a final LLMResponse."""
         if self.streaming:
@@ -89,7 +173,15 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
 
         async for llm_response in self._iter_llm_responses():
             assert isinstance(llm_response, LLMResponse)
+            for trace_resp in self._agent_responses_from_trace_chains(llm_response):
+                yield trace_resp
             if llm_response.is_chunk:
+                if (
+                    getattr(llm_response, "trace_chains", None)
+                    and not llm_response.result_chain
+                    and not llm_response.completion_text
+                ):
+                    continue
                 if llm_response.result_chain:
                     yield AgentResponse(
                         type="streaming_delta",
@@ -151,11 +243,17 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
         # 如果有工具调用，还需处理工具调用
         if llm_resp.tools_call_name:
             tool_call_result_blocks = []
-            for tool_call_name in llm_resp.tools_call_name:
+            for tool_call_name, tool_call_args, tool_call_id in zip(
+                llm_resp.tools_call_name,
+                llm_resp.tools_call_args,
+                llm_resp.tools_call_ids,
+            ):
                 yield AgentResponse(
                     type="tool_call",
                     data=AgentResponseData(
-                        chain=MessageChain().message(f"🔨 调用工具: {tool_call_name}")
+                        chain=self._tool_call_chain(
+                            self.req, tool_call_name, tool_call_args, tool_call_id
+                        )
                     ),
                 )
             async for result in self._handle_function_tools(self.req, llm_resp):
@@ -221,7 +319,9 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                                     content=res.content[0].text,
                                 )
                             )
-                            yield MessageChain().message(res.content[0].text)
+                            yield self._tool_result_chain(
+                                req, func_tool_name, func_tool_id, res.content[0].text
+                            )
                         elif isinstance(res.content[0], ImageContent):
                             tool_call_result_blocks.append(
                                 ToolCallMessageSegment(
@@ -243,7 +343,9 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                                         content=resource.text,
                                     )
                                 )
-                                yield MessageChain().message(resource.text)
+                                yield self._tool_result_chain(
+                                    req, func_tool_name, func_tool_id, resource.text
+                                )
                             elif (
                                 isinstance(resource, BlobResourceContents)
                                 and resource.mimeType
@@ -267,7 +369,13 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                                         content="返回的数据类型不受支持",
                                     )
                                 )
-                                yield MessageChain().message("返回的数据类型不受支持。")
+                                yield self._tool_result_chain(
+                                    req,
+                                    func_tool_name,
+                                    func_tool_id,
+                                    "返回的数据类型不受支持。",
+                                    status="error",
+                                )
 
                     elif resp is None:
                         # Tool 直接请求发送消息给用户
@@ -299,6 +407,13 @@ class ToolLoopAgentRunner(BaseAgentRunner[TContext]):
                         tool_call_id=func_tool_id,
                         content=f"error: {str(e)}",
                     )
+                )
+                yield self._tool_result_chain(
+                    req,
+                    func_tool_name,
+                    func_tool_id,
+                    f"error: {str(e)}",
+                    status="error",
                 )
 
         # 处理函数调用响应

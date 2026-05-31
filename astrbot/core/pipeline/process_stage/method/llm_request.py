@@ -252,7 +252,9 @@ async def run_agent(
                         resp.data["chain"].type = "tool_call_result"
                         await astr_event.send(resp.data["chain"])
                         continue
-                    # 对于其他情况，暂时先不处理
+                    if astr_event.get_platform_name() == "webchat":
+                        msg_chain.type = "tool_call_result"
+                        await astr_event.send(msg_chain)
                     continue
                 elif resp.type == "tool_call":
                     if agent_runner.streaming:
@@ -261,6 +263,12 @@ async def run_agent(
                     if show_tool_use or astr_event.get_platform_name() == "webchat":
                         resp.data["chain"].type = "tool_call"
                         await astr_event.send(resp.data["chain"])
+                    continue
+                elif resp.type == "reasoning":
+                    msg_chain = resp.data["chain"]
+                    msg_chain.type = "reasoning"
+                    if astr_event.get_platform_name() == "webchat":
+                        await astr_event.send(msg_chain)
                     continue
 
                 if not agent_runner.streaming:

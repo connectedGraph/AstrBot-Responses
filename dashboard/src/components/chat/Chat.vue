@@ -874,6 +874,7 @@ export default {
                 const decoder = new TextDecoder();
                 let in_streaming = false;
                 let message_obj = null;
+                let activeBotMessage = null;
 
                 this.isStreaming = true
 
@@ -915,7 +916,37 @@ export default {
                                 continue;
                             }
 
-                            if (chunk_json.type === 'image') {
+                            if (chunk_json.type === 'tool_call' || chunk_json.type === 'tool_call_result' || chunk_json.type === 'reasoning') {
+                                if (!activeBotMessage) {
+                                    activeBotMessage = {
+                                        type: 'bot',
+                                        message: this.ref(''),
+                                        parts: []
+                                    };
+                                    this.messages.push({
+                                        "content": activeBotMessage
+                                    });
+                                }
+                                const tracePart = {
+                                    type: chunk_json.type,
+                                    data: chunk_json.data,
+                                    chain_type: chunk_json.chain_type
+                                };
+                                const traceData = chunk_json.data && typeof chunk_json.data === 'object' ? chunk_json.data : {};
+                                const traceId = traceData.id || traceData.tool_call_id || null;
+                                const existingIndex = traceId
+                                    ? activeBotMessage.parts.findIndex(part => {
+                                        const partData = part.data && typeof part.data === 'object' ? part.data : {};
+                                        const partId = partData.id || partData.tool_call_id || null;
+                                        return part.type === chunk_json.type && partId === traceId;
+                                    })
+                                    : -1;
+                                if (existingIndex >= 0) {
+                                    activeBotMessage.parts.splice(existingIndex, 1, tracePart);
+                                } else {
+                                    activeBotMessage.parts.push(tracePart);
+                                }
+                            } else if (chunk_json.type === 'image') {
                                 let img = chunk_json.data.replace('[IMAGE]', '');
                                 const imageUrl = await this.getMediaFile(img);
                                 let bot_resp = {
@@ -942,10 +973,17 @@ export default {
                                     message_obj = {
                                         type: 'bot',
                                         message: this.ref(chunk_json.data),
+                                        parts: activeBotMessage?.parts || []
                                     }
-                                    this.messages.push({
-                                        "content": message_obj
-                                    });
+                                    if (activeBotMessage) {
+                                        activeBotMessage.message = message_obj.message;
+                                        message_obj = activeBotMessage;
+                                    } else {
+                                        this.messages.push({
+                                            "content": message_obj
+                                        });
+                                        activeBotMessage = message_obj;
+                                    }
                                     in_streaming = true;
                                 } else {
                                     message_obj.message.value += chunk_json.data;
@@ -957,9 +995,11 @@ export default {
                                     conversation.title = chunk_json.data;
                                 }
                             }
-                            if ((chunk_json.type === 'break' && chunk_json.streaming) || !chunk_json.streaming) {
+                            const traceTypes = ['tool_call', 'tool_call_result', 'reasoning'];
+                            if ((chunk_json.type === 'break' && chunk_json.streaming) || (!chunk_json.streaming && !traceTypes.includes(chunk_json.type))) {
                                 // break means a segment end
                                 in_streaming = false;
+                                activeBotMessage = null;
                             }
                         }
                     } catch (readError) {

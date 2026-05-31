@@ -41,6 +41,46 @@
                             <div v-if="msg.content.message && msg.content.message.trim()"
                                 v-html="md.render(msg.content.message)" class="markdown-content"></div>
 
+                            <!-- Reasoning and tools -->
+                            <div class="trace-parts" v-if="msg.content.parts && msg.content.parts.length > 0">
+                                <div v-for="(part, partIndex) in msg.content.parts" :key="partIndex">
+                                    <details v-if="part.type === 'reasoning'" class="trace-card reasoning-card">
+                                        <summary>
+                                            <span class="trace-title">思考摘要</span>
+                                            <span class="trace-meta">CoT summary</span>
+                                        </summary>
+                                        <div class="trace-body markdown-content"
+                                            v-html="md.render(formatPartText(part.data))"></div>
+                                    </details>
+
+                                    <details v-else-if="part.type === 'tool_call' || part.type === 'tool_call_result'"
+                                        class="trace-card tool-card">
+                                        <summary>
+                                            <span class="trace-title">{{ getToolName(part) }}</span>
+                                            <span class="trace-meta">{{ formatTraceType(part.type) }}{{ getToolStatus(part) ? ' · ' + getToolStatus(part) : '' }}</span>
+                                        </summary>
+                                        <div class="trace-body">
+                                            <div class="trace-section" v-if="getToolDescription(part)">
+                                                <div class="trace-label">Description</div>
+                                                <div class="trace-text">{{ getToolDescription(part) }}</div>
+                                            </div>
+                                            <div class="trace-section" v-if="getToolArgs(part)">
+                                                <div class="trace-label">Args</div>
+                                                <pre>{{ stringifyJson(getToolArgs(part)) }}</pre>
+                                            </div>
+                                            <div class="trace-section" v-if="getToolResult(part)">
+                                                <div class="trace-label">Result</div>
+                                                <pre>{{ stringifyJson(getToolResult(part)) }}</pre>
+                                            </div>
+                                            <div class="trace-section" v-if="getToolSchema(part)">
+                                                <div class="trace-label">Schema</div>
+                                                <pre>{{ stringifyJson(getToolSchema(part)) }}</pre>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+                            </div>
+
                             <!-- Image -->
                             <div class="embedded-images"
                                 v-if="msg.content.embedded_images && msg.content.embedded_images.length > 0">
@@ -213,6 +253,89 @@ export default {
                 }
                 document.body.removeChild(textArea);
             });
+        },
+
+        normalizeTraceData(data) {
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                return data;
+            }
+            if (typeof data === 'string') {
+                try {
+                    return JSON.parse(data);
+                } catch (_) {
+                    return { text: data };
+                }
+            }
+            return {};
+        },
+
+        formatPartText(data) {
+            if (typeof data === 'string') {
+                return data;
+            }
+            const normalized = this.normalizeTraceData(data);
+            return normalized.text || normalized.content || this.stringifyJson(normalized);
+        },
+
+        formatTraceType(type) {
+            if (type === 'tool_call') {
+                return 'tool call';
+            }
+            if (type === 'tool_call_result') {
+                return 'tool result';
+            }
+            return type;
+        },
+
+        getToolName(part) {
+            const data = this.normalizeTraceData(part.data);
+            return data.name || data.tool_name || data.id || 'tool';
+        },
+
+        getToolStatus(part) {
+            const data = this.normalizeTraceData(part.data);
+            return data.status || '';
+        },
+
+        getToolDescription(part) {
+            const data = this.normalizeTraceData(part.data);
+            return data.description || '';
+        },
+
+        getToolArgs(part) {
+            const data = this.normalizeTraceData(part.data);
+            return data.args || data.arguments || null;
+        },
+
+        getToolResult(part) {
+            const data = this.normalizeTraceData(part.data);
+            if (data.result === undefined || data.result === null || data.result === '') {
+                return null;
+            }
+            if (typeof data.result === 'string') {
+                try {
+                    return JSON.parse(data.result);
+                } catch (_) {
+                    return data.result;
+                }
+            }
+            return data.result;
+        },
+
+        getToolSchema(part) {
+            const data = this.normalizeTraceData(part.data);
+            return data.schema || null;
+        },
+
+        stringifyJson(value) {
+            if (typeof value === 'string') {
+                return value;
+            }
+            try {
+                return JSON.stringify(value, null, 2);
+            } catch (_) {
+                return String(value);
+            }
         },
 
         // 显示复制成功提示
@@ -533,6 +656,85 @@ export default {
 .embedded-audio .audio-player {
     width: 100%;
     max-width: 300px;
+}
+
+.trace-parts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0 10px;
+}
+
+.trace-card {
+    border: 1px solid var(--v-theme-border);
+    border-radius: 8px;
+    background: rgba(127, 127, 127, 0.06);
+    overflow: hidden;
+}
+
+.trace-card summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    padding: 8px 10px;
+    list-style: none;
+}
+
+.trace-card summary::-webkit-details-marker {
+    display: none;
+}
+
+.trace-title {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.trace-meta {
+    color: var(--v-theme-secondaryText);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.trace-body {
+    border-top: 1px solid var(--v-theme-border);
+    padding: 10px;
+}
+
+.trace-section {
+    margin-bottom: 10px;
+}
+
+.trace-section:last-child {
+    margin-bottom: 0;
+}
+
+.trace-label {
+    color: var(--v-theme-secondaryText);
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.trace-text {
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.trace-section pre {
+    background: rgb(var(--v-theme-preBg));
+    border: 1px solid var(--v-theme-border);
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.45;
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    padding: 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 /* 动画类 */

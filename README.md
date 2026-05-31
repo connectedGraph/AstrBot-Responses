@@ -25,6 +25,27 @@
 
 AstrBot 是一个开源的一站式 Agentic 聊天机器人平台及开发框架。
 
+## AstrBot-Responses Fork
+
+This fork is based on upstream `v4.3.1` and adds an `openai_responses` provider for OpenAI-compatible `/v1/responses` endpoints. It keeps AstrBot's existing tool loop, while adding model built-in `web_search` and visible Responses trace events in WebUI.
+
+What changed:
+
+1. `openai_responses` sends requests to `/v1/responses`, lists models through `/v1/models`, and converts AstrBot/MCP tools into Responses function tools.
+2. The official built-in web search tool is always included as `{"type": "web_search"}`. This is model-native search, different from external Bing, Tavily, or plugin search tools that AstrBot executes itself.
+3. Responses `web_search_call` events are shown as expandable `tool_call` / `tool_call_result` cards in WebUI, including args, result, description, schema, and status when the API returns them.
+4. Reasoning summaries are requested with `reasoning: {"summary": "auto"}` and displayed as a thinking summary when returned. Hidden raw chain-of-thought is not exposed.
+5. Optional trace fields use `include: ["web_search_call.action.sources"]`; if an upstream rejects `include` or `reasoning.summary`, the provider retries once without those optional trace fields.
+
+Abbreviations used in this fork:
+
+- `MCP`: Model Context Protocol, used to attach external tools to AstrBot.
+- `CoT`: chain of thought. This fork only displays API-returned summaries, not hidden raw reasoning.
+- `SSE`: Server-Sent Events, the HTTP streaming format used by Responses and WebChat streaming.
+- `Responses`: OpenAI's `/v1/responses` API shape.
+- `tool_call`: the model requested a tool.
+- `tool_call_result`: the tool execution result returned to the model or shown in UI.
+
 ## 主要功能
 
 1. **大模型对话**。支持接入多种大模型服务。支持多模态、工具调用、MCP、原生知识库、人设等功能。

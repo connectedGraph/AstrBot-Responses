@@ -1,9 +1,10 @@
 import os
 import uuid
 import base64
+import json
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
-from astrbot.api.message_components import Plain, Image, Record
+from astrbot.api.message_components import Plain, Image, Record, Json
 from astrbot.core.utils.io import download_image_by_url
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from .webchat_queue_mgr import webchat_queue_mgr
@@ -31,18 +32,24 @@ class WebChatMessageEvent(AstrMessageEvent):
             return ""
 
         data = ""
+        has_structured_json = any(isinstance(comp, Json) for comp in message.chain)
         for comp in message.chain:
             if isinstance(comp, Plain):
+                if message.type in ("tool_call", "tool_call_result") and has_structured_json:
+                    continue
                 data = comp.text
+                event_type = "reasoning" if message.type == "reasoning" else "plain"
                 await web_chat_back_queue.put(
                     {
-                        "type": "plain",
+                        "type": event_type,
                         "cid": cid,
                         "data": data,
                         "streaming": streaming,
                         "chain_type": message.type,
                     }
                 )
+                if event_type == "reasoning":
+                    data = ""
             elif isinstance(comp, Image):
                 # save image to local
                 filename = str(uuid.uuid4()) + ".jpg"
@@ -96,6 +103,25 @@ class WebChatMessageEvent(AstrMessageEvent):
                         "streaming": streaming,
                     }
                 )
+            elif isinstance(comp, Json):
+                payload = comp.data
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except json.JSONDecodeError:
+                        payload = {"raw": payload}
+                event_type = message.type if message.type else "json"
+                await web_chat_back_queue.put(
+                    {
+                        "type": event_type,
+                        "cid": cid,
+                        "data": payload,
+                        "streaming": streaming,
+                        "chain_type": message.type,
+                    }
+                )
+                if event_type == "reasoning":
+                    continue
             else:
                 logger.debug(f"webchat 忽略: {comp.type}")
 

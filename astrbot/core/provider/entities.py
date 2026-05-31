@@ -225,6 +225,8 @@ class LLMResponse:
     """工具调用名称"""
     tools_call_ids: List[str] = field(default_factory=list)
     """工具调用 ID"""
+    trace_chains: List[MessageChain] = field(default_factory=list)
+    """供应商原生返回的工具调用、工具结果、思考摘要等可展示时间线。"""
 
     raw_completion: ChatCompletion | GenerateContentResponse | Message | None = None
     _new_record: Dict[str, Any] | None = None
@@ -242,6 +244,7 @@ class LLMResponse:
         tools_call_args: List[Dict[str, Any]] | None = None,
         tools_call_name: List[str] | None = None,
         tools_call_ids: List[str] | None = None,
+        trace_chains: List[MessageChain] | None = None,
         raw_completion: ChatCompletion | None = None,
         _new_record: Dict[str, Any] | None = None,
         is_chunk: bool = False,
@@ -262,6 +265,8 @@ class LLMResponse:
             tools_call_name = []
         if tools_call_ids is None:
             tools_call_ids = []
+        if trace_chains is None:
+            trace_chains = []
 
         self.role = role
         self.completion_text = completion_text
@@ -269,6 +274,7 @@ class LLMResponse:
         self.tools_call_args = tools_call_args
         self.tools_call_name = tools_call_name
         self.tools_call_ids = tools_call_ids
+        self.trace_chains = trace_chains
         self.raw_completion = raw_completion
         self._new_record = _new_record
         self.is_chunk = is_chunk

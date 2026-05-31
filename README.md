@@ -1,232 +1,129 @@
-<img width="430" height="31" alt="image" src="https://github.com/user-attachments/assets/474c822c-fab7-41be-8c23-6dae252823ed" /><p align="center">
- 
-![AstrBot-Logo-Simplified](https://github.com/user-attachments/assets/ffd99b6b-3272-4682-beaa-6fe74250f7d9)
+# AstrBot-Responses
 
-</p>
+This is a personal fork of [AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot), based on upstream tag `v4.3.1`.
 
-<div align="center">
+This fork focuses on OpenAI-compatible `/v1/responses` support, model-native web search, and visible tool/reasoning traces in AstrBot WebUI. The upstream project README, full deployment docs, and general project introduction are intentionally not duplicated here. Read the original upstream README here:
 
-<a href="https://trendshift.io/repositories/12875" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12875" alt="Soulter%2FAstrBot | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+[Upstream AstrBot README](https://github.com/AstrBotDevs/AstrBot/blob/v4.3.1/README.md)
 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/Soulter/AstrBot?style=for-the-badge&color=76bad9)](https://github.com/Soulter/AstrBot/releases/latest)
-<img src="https://img.shields.io/badge/python-3.10+-blue.svg?style=for-the-badge&color=76bad9" alt="python">
-<a href="https://hub.docker.com/r/soulter/astrbot"><img alt="Docker pull" src="https://img.shields.io/docker/pulls/soulter/astrbot.svg?style=for-the-badge&color=76bad9"/></a>
-<a  href="https://qm.qq.com/cgi-bin/qm/qr?k=wtbaNx7EioxeaqS9z7RQWVXPIxg2zYr7&jump_from=webapi&authKey=vlqnv/AV2DbJEvGIcxdlNSpfxVy+8vVqijgreRdnVKOaydpc+YSw4MctmEbr0k5"><img alt="QQ_community" src="https://img.shields.io/badge/QQ群-775869627-purple?style=for-the-badge&color=76bad9"></a>
-<a  href="https://t.me/+hAsD2Ebl5as3NmY1"><img alt="Telegram_community" src="https://img.shields.io/badge/Telegram-AstrBot-purple?style=for-the-badge&color=76bad9"></a>
-[![wakatime](https://wakatime.com/badge/user/915e5316-99c6-4563-a483-ef186cf000c9/project/018e705a-a1a7-409a-a849-3013485e6c8e.svg?style=for-the-badge&color=76bad9)](https://wakatime.com/badge/user/915e5316-99c6-4563-a483-ef186cf000c9/project/018e705a-a1a7-409a-a849-3013485e6c8e)
-![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.soulter.top%2Fastrbot%2Fplugin-num&query=%24.result&suffix=%E4%B8%AA&style=for-the-badge&label=%E6%8F%92%E4%BB%B6%E5%B8%82%E5%9C%BA&cacheSeconds=3600)
+## Fork Changes
 
-<a href="https://github.com/Soulter/AstrBot/blob/master/README_en.md">English</a> ｜
-<a href="https://github.com/Soulter/AstrBot/blob/master/README_ja.md">日本語</a> ｜
-<a href="https://astrbot.app/">文档</a> ｜
-<a href="https://blog.astrbot.app/">Blog</a> ｜
-<a href="https://github.com/Soulter/AstrBot/issues">问题提交</a>
-</div>
+1. Adds an `openai_responses` provider for OpenAI-compatible `/v1/responses` endpoints.
+2. Lists models through the compatible `/v1/models` endpoint.
+3. Always includes the official built-in web search tool as `{"type": "web_search"}`.
+4. Converts AstrBot and MCP tools into Responses function tools.
+5. Converts Responses `function_call` output back into AstrBot's existing tool loop shape.
+6. Maps Responses native `web_search_call` events into WebUI `tool_call` and `tool_call_result` cards.
+7. Requests reasoning summaries with `reasoning: {"summary": "auto"}` and displays only returned summaries.
+8. Requests `include: ["web_search_call.action.sources"]` so search sources can appear in tool results when the upstream supports them.
+9. Retries once without optional trace fields if an upstream rejects `include` or `reasoning.summary`.
+10. Extends WebUI chat/history rendering so tool cards can show name, args, result, description, schema, and status.
 
-AstrBot 是一个开源的一站式 Agentic 聊天机器人平台及开发框架。
+## What This Fork Does Not Do
 
-## AstrBot-Responses Fork
+- It does not expose hidden raw chain-of-thought.
+- It does not replace AstrBot's existing tool loop.
+- It does not open or target an upstream pull request.
+- It keeps this README focused on this fork's Responses changes.
 
-This fork is based on upstream `v4.3.1` and adds an `openai_responses` provider for OpenAI-compatible `/v1/responses` endpoints. It keeps AstrBot's existing tool loop, while adding model built-in `web_search` and visible Responses trace events in WebUI.
+## Provider Setup
 
-What changed:
+Add a provider using the WebUI template named `OpenAI Responses`, or configure one manually:
 
-1. `openai_responses` sends requests to `/v1/responses`, lists models through `/v1/models`, and converts AstrBot/MCP tools into Responses function tools.
-2. The official built-in web search tool is always included as `{"type": "web_search"}`. This is model-native search, different from external Bing, Tavily, or plugin search tools that AstrBot executes itself.
-3. Responses `web_search_call` events are shown as expandable `tool_call` / `tool_call_result` cards in WebUI, including args, result, description, schema, and status when the API returns them.
-4. Reasoning summaries are requested with `reasoning: {"summary": "auto"}` and displayed as a thinking summary when returned. Hidden raw chain-of-thought is not exposed.
-5. Optional trace fields use `include: ["web_search_call.action.sources"]`; if an upstream rejects `include` or `reasoning.summary`, the provider retries once without those optional trace fields.
+```json
+{
+  "id": "openai_responses",
+  "provider": "openai",
+  "type": "openai_responses",
+  "provider_type": "chat_completion",
+  "enable": true,
+  "key": ["YOUR_API_KEY"],
+  "api_base": "https://api.openai.com/v1",
+  "timeout": 120,
+  "model_config": {
+    "model": "gpt-4.1-mini",
+    "temperature": 0.4
+  },
+  "custom_extra_body": {},
+  "custom_headers": {},
+  "modalities": ["text", "image", "tool_use"]
+}
+```
 
-Abbreviations used in this fork:
+The provider sends requests to:
 
-- `MCP`: Model Context Protocol, used to attach external tools to AstrBot.
+- `POST {api_base}/responses`
+- `GET {api_base}/models`
+
+`api_base` should include `/v1`, for example `https://api.openai.com/v1`.
+
+## Built-In Web Search
+
+The `web_search` tool used here is model-native Responses API web search. It is different from external AstrBot search plugins such as Bing, Tavily, or other plugin-executed search providers.
+
+This fork sends the web search tool directly to the model:
+
+```json
+{"type": "web_search"}
+```
+
+When the upstream returns `web_search_call` events, AstrBot WebUI shows them as expandable tool cards.
+
+## Trace Display
+
+The fork reuses AstrBot's message-chain flow instead of inventing a separate frontend protocol.
+
+Responses events are mapped as follows:
+
+| Responses event | WebUI display |
+| --- | --- |
+| `web_search_call` | `tool_call` / `tool_call_result` card |
+| `function_call` | AstrBot tool loop execution |
+| `reasoning.summary` | thinking summary block |
+| `output_text.delta` | normal streamed assistant text |
+
+Tool cards can display:
+
+- name
+- args
+- result
+- description
+- schema
+- status
+
+## Abbreviations
+
+- `MCP`: Model Context Protocol. AstrBot can use it to attach external tools.
 - `CoT`: chain of thought. This fork only displays API-returned summaries, not hidden raw reasoning.
 - `SSE`: Server-Sent Events, the HTTP streaming format used by Responses and WebChat streaming.
-- `Responses`: OpenAI's `/v1/responses` API shape.
+- `Responses`: OpenAI's `/v1/responses` API shape for multimodal, tool-using model responses.
 - `tool_call`: the model requested a tool.
-- `tool_call_result`: the tool execution result returned to the model or shown in UI.
+- `tool_call_result`: the tool execution result returned to the model or displayed in the UI.
 
-## 主要功能
+## Development Notes
 
-1. **大模型对话**。支持接入多种大模型服务。支持多模态、工具调用、MCP、原生知识库、人设等功能。
-2. **多消息平台支持**。支持接入 QQ、企业微信、微信公众号、飞书、Telegram、钉钉、Discord、KOOK 等平台。支持速率限制、白名单、百度内容审核。
-3. **Agent**。完善适配的 Agentic 能力。支持多轮工具调用、内置沙盒代码执行器、网页搜索等功能。
-4. **插件扩展**。深度优化的插件机制，支持[开发插件](https://astrbot.app/dev/plugin.html)扩展功能，社区插件生态丰富。
-5. **WebUI**。可视化配置和管理机器人，功能齐全。
+Main modified areas:
 
-## 部署方式
+- `astrbot/core/provider/sources/openai_responses_source.py`
+- `astrbot/core/provider/entities.py`
+- `astrbot/core/agent/runners/tool_loop_agent_runner.py`
+- `astrbot/core/pipeline/process_stage/method/llm_request.py`
+- `astrbot/core/platform/sources/webchat/webchat_event.py`
+- `astrbot/dashboard/routes/chat.py`
+- `dashboard/src/components/chat/Chat.vue`
+- `dashboard/src/components/chat/MessageList.vue`
+- `dashboard/src/views/ConversationPage.vue`
 
-#### Docker 部署
-
-推荐使用 Docker / Docker Compose 方式部署 AstrBot。
-
-请参阅官方文档 [使用 Docker 部署 AstrBot](https://astrbot.app/deploy/astrbot/docker.html#%E4%BD%BF%E7%94%A8-docker-%E9%83%A8%E7%BD%B2-astrbot) 。
-
-#### 宝塔面板部署
-
-AstrBot 与宝塔面板合作，已上架至宝塔面板。
-
-请参阅官方文档 [宝塔面板部署](https://astrbot.app/deploy/astrbot/btpanel.html) 。
-
-#### 1Panel 部署
-
-AstrBot 已由 1Panel 官方上架至 1Panel 面板。
-
-请参阅官方文档 [1Panel 部署](https://astrbot.app/deploy/astrbot/1panel.html) 。
-
-#### 在 雨云 上部署
-
-AstrBot 已由雨云官方上架至云应用平台，可一键部署。
-
-[![Deploy on RainYun](https://rainyun-apps.cn-nb1.rains3.com/materials/deploy-on-rainyun-en.svg)](https://app.rainyun.com/apps/rca/store/5994?ref=NjU1ODg0)
-
-#### 在 Replit 上部署
-
-社区贡献的部署方式。
-
-[![Run on Repl.it](https://repl.it/badge/github/Soulter/AstrBot)](https://repl.it/github/Soulter/AstrBot)
-
-#### Windows 一键安装器部署
-
-请参阅官方文档 [使用 Windows 一键安装器部署 AstrBot](https://astrbot.app/deploy/astrbot/windows.html) 。
-
-#### CasaOS 部署
-
-社区贡献的部署方式。
-
-请参阅官方文档 [CasaOS 部署](https://astrbot.app/deploy/astrbot/casaos.html) 。
-
-#### 手动部署
-
-首先安装 uv：
+Useful checks:
 
 ```bash
-pip install uv
+python -m py_compile astrbot/core/provider/sources/openai_responses_source.py
+cd dashboard
+npm run build
 ```
 
-通过 Git Clone 安装 AstrBot：
+## Upstream
 
-```bash
-git clone https://github.com/AstrBotDevs/AstrBot && cd AstrBot
-uv run main.py
-```
+This fork remains derived from AstrBot. For the original project description, installation guide, platform matrix, and upstream contribution policy, use:
 
-或者请参阅官方文档 [通过源码部署 AstrBot](https://astrbot.app/deploy/astrbot/cli.html) 。
-
-## 🌍 社区
-
-### QQ 群组
-
-- 1 群：322154837
-- 3 群：630166526
-- 5 群：822130018
-- 6 群：753075035
-- 开发者群：975206796
-- 开发者群（备份）：295657329
-
-### Telegram 群组
-
-<a href="https://t.me/+hAsD2Ebl5as3NmY1"><img alt="Telegram_community" src="https://img.shields.io/badge/Telegram-AstrBot-purple?style=for-the-badge&color=76bad9"></a>
-
-### Discord 群组
-
-<a href="https://discord.gg/hAVk6tgV36"><img alt="Discord_community" src="https://img.shields.io/badge/Discord-AstrBot-purple?style=for-the-badge&color=76bad9"></a>
-
-## ⚡ 消息平台支持情况
-
-| 平台    | 支持性 |
-| -------- | ------- |
-| QQ(官方机器人接口) | ✔    |
-| QQ(OneBot)      | ✔    |
-| Telegram   | ✔    |
-| 企业微信    | ✔    |
-| 微信客服    | ✔    |
-| 微信公众号    | ✔    |
-| 飞书   | ✔    |
-| 钉钉   | ✔    |
-| Slack   | ✔    |
-| Discord   | ✔    |
-| [KOOK](https://github.com/wuyan1003/astrbot_plugin_kook_adapter)   | ✔    |
-| [VoceChat](https://github.com/HikariFroya/astrbot_plugin_vocechat)   | ✔    |
-| Satori   | ✔    |
-| Misskey   | ✔    |
-
-## ⚡ 提供商支持情况
-
-| 名称    | 支持性 | 类型 | 备注 |
-| -------- | ------- | ------- | ------- |
-| OpenAI | ✔    | 文本生成 | 支持任何兼容 OpenAI API 的服务 |
-| Anthropic | ✔    | 文本生成 |  |
-| Google Gemini | ✔    | 文本生成 |  |
-| Dify | ✔    | LLMOps |  |
-| 阿里云百炼应用 | ✔    | LLMOps |  |
-| Ollama | ✔    | 模型加载器 | 本地部署 DeepSeek、Llama 等开源语言模型 |
-| LM Studio | ✔    | 模型加载器 | 本地部署 DeepSeek、Llama 等开源语言模型 |
-| [优云智算](https://www.compshare.cn/?ytag=GPU_YY-gh_astrbot&referral_code=FV7DcGowN4hB5UuXKgpE74) | ✔    | 模型 API 及算力服务平台 |  |
-| [302.AI](https://share.302.ai/rr1M3l) | ✔    | 模型 API 服务平台 |  |
-| 硅基流动 | ✔    | 模型 API 服务平台 |  |
-| PPIO 派欧云 | ✔    | 模型 API 服务平台 |  |
-| OneAPI | ✔    | LLM 分发系统 |  |
-| Whisper | ✔    | 语音转文本 | 支持 API、本地部署 |
-| SenseVoice | ✔    | 语音转文本 | 本地部署 |
-| OpenAI TTS API | ✔    | 文本转语音 |  |
-| GSVI | ✔    | 文本转语音 | GPT-Sovits-Inference |
-| GPT-SoVITs | ✔    | 文本转语音 | GPT-Sovits-Inference |
-| FishAudio | ✔    | 文本转语音 | GPT-Sovits 作者参与的项目 |
-| Edge TTS | ✔    | 文本转语音 | Edge 浏览器的免费 TTS |
-| 阿里云百炼 TTS | ✔    | 文本转语音 |  |
-| Azure TTS | ✔    | 文本转语音 | Microsoft Azure TTS |
-
-## ❤️ 贡献
-
-欢迎任何 Issues/Pull Requests！只需要将你的更改提交到此项目 ：)
-
-### 如何贡献
-
-你可以通过查看问题或帮助审核 PR（拉取请求）来贡献。任何问题或 PR 都欢迎参与，以促进社区贡献。当然，这些只是建议，你可以以任何方式进行贡献。对于新功能的添加，请先通过 Issue 讨论。
-
-### 开发环境
-
-AstrBot 使用 `ruff` 进行代码格式化和检查。
-
-```bash
-git clone https://github.com/Soulter/AstrBot
-pip install pre-commit
-pre-commit install
-```
-
-## ❤️ Special Thanks
-
-特别感谢所有 Contributors 和插件开发者对 AstrBot 的贡献 ❤️
-
-<a href="https://github.com/AstrBotDevs/AstrBot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=AstrBotDevs/AstrBot" />
-</a>
-
-此外，本项目的诞生离不开以下开源项目的帮助：
-
-- [NapNeko/NapCatQQ](https://github.com/NapNeko/NapCatQQ) - 伟大的猫猫框架
-
-另外，一些同类型其他的活跃开源 Bot 项目：
-
-- [nonebot/nonebot2](https://github.com/nonebot/nonebot2) - 扩展性极强的 Bot 框架
-- [koishijs/koishi](https://github.com/koishijs/koishi) - 扩展性极强的 Bot 框架
-- [MaiM-with-u/MaiBot](https://github.com/MaiM-with-u/MaiBot) - 注重拟人功能的 ChatBot
-- [langbot-app/LangBot](https://github.com/langbot-app/LangBot) - 功能丰富的 Bot 平台
-- [KroMiose/nekro-agent](https://github.com/KroMiose/nekro-agent) - 注重 Agent 的 ChatBot
-- [zhenxun-org/zhenxun_bot](https://github.com/zhenxun-org/zhenxun_bot) - 功能完善的 ChatBot
-
-## ⭐ Star History
-
-> [!TIP] 
-> 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 <3
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=soulter/astrbot&type=Date)](https://star-history.com/#soulter/astrbot&Date)
-
-</div>
-
-</details>
-
-_私は、高性能ですから!_
+[https://github.com/AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot)

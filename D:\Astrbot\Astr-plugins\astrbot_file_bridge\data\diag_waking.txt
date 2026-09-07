@@ -1,0 +1,8 @@
+[1788522062] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.At: 'At'>, <ComponentType.Plain: 'Plain'>] msg_str='你是谁？' sender=1808666025 self=1369934060 chain_len=2
+[1788523067] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Poke: 'Poke'>] msg_str='' sender=1020222085 self=1369934060 chain_len=1
+[1788523067] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Poke: 'Poke'>] msg_str='' sender=1020222085 self=1369934060 chain_len=1
+[1788523067] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Poke: 'Poke'>] msg_str='' sender=1020222085 self=1369934060 chain_len=1
+[1788530731] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Plain: 'Plain'>] msg_str='https://pay.ldxp.cn/shop/VKOMY73X' sender=1808666025 self=1369934060 chain_len=1
+[1788536087] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Plain: 'Plain'>] msg_str='中转站' sender=1808666025 self=1369934060 chain_len=1
+[1788537881] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Plain: 'Plain'>] msg_str='中转站' sender=1808666025 self=1369934060 chain_len=1
+[1788539295] type=MessageType.GROUP_MESSAGE msg_types=[<ComponentType.Plain: 'Plain'>] msg_str='中转站' sender=1808666025 self=12345678 chain_len=1

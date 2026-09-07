@@ -134,7 +134,7 @@ npm run build
 
 ## English
 
-This is a personal fork of [AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot), based on upstream tag `v4.3.1`.
+This is a personal fork of [AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot), based on upstream tag `v4.25.1`.
 
 This fork focuses on OpenAI-compatible `/v1/responses` support, model-native web search, and visible tool/reasoning traces in AstrBot WebUI. The upstream README, full deployment docs, and general project introduction are intentionally not duplicated here. Read the original upstream README here:
 

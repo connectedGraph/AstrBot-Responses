@@ -1,19 +1,20 @@
-import astrbot.api.message_components as Comp
 import copy
+from sys import maxsize
+
+import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.session_waiter import (
-    SessionWaiter,
-    USER_SESSIONS,
     FILTERS,
-    session_waiter,
+    USER_SESSIONS,
     SessionController,
+    SessionWaiter,
+    session_waiter,
 )
-from sys import maxsize
 
 
-class Waiter(Star):
+class Main(Star):
     """会话控制"""
 
     def __init__(self, context: Context):
@@ -52,13 +53,14 @@ class Waiter(Star):
 
                             # 获取用户当前的对话信息
                             curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
-                                event.unified_msg_origin
+                                event.unified_msg_origin,
                             )
                             conversation = None
 
                             if curr_cid:
                                 conversation = await self.context.conversation_manager.get_conversation(
-                                    event.unified_msg_origin, curr_cid
+                                    event.unified_msg_origin,
+                                    curr_cid,
                                 )
                             else:
                                 # 创建新对话
@@ -81,16 +83,18 @@ class Waiter(Star):
                                 conversation=conversation,
                             )
                         except Exception as e:
-                            logger.error(f"LLM response failed: {str(e)}")
+                            logger.error(f"LLM response failed: {e!s}")
                             # LLM 回复失败，使用原始预设回复
                             yield event.plain_result("想要问什么呢？😄")
 
                     @session_waiter(60)
                     async def empty_mention_waiter(
-                        controller: SessionController, event: AstrMessageEvent
+                        controller: SessionController,
+                        event: AstrMessageEvent,
                     ):
                         event.message_obj.message.insert(
-                            0, Comp.At(qq=event.get_self_id(), name=event.get_self_id())
+                            0,
+                            Comp.At(qq=event.get_self_id(), name=event.get_self_id()),
                         )
                         new_event = copy.copy(event)
                         # 重新推入事件队列

@@ -1,6 +1,5 @@
 import copy
 import json
-import os
 import random
 import time
 from collections.abc import AsyncGenerator
@@ -10,9 +9,12 @@ import httpx
 
 import astrbot.core.message.components as Comp
 from astrbot import logger
+from astrbot.core.agent.message import ContentPart, Message
 from astrbot.core.agent.tool import ToolSet
+from astrbot.core.exceptions import EmptyModelOutputError
 from astrbot.core.message.message_event_result import MessageChain
-from astrbot.core.provider.entities import LLMResponse, ToolCallsResult
+from astrbot.core.provider.entities import LLMResponse, TokenUsage, ToolCallsResult
+from astrbot.core.utils.network_utils import create_proxy_client
 
 from ..register import register_provider_adapter
 from .openai_source import ProviderOpenAIOfficial
@@ -21,30 +23,14 @@ from .openai_source import ProviderOpenAIOfficial
 @register_provider_adapter(
     "openai_responses",
     "OpenAI Responses API 提供商适配器",
-    default_config_tmpl={
-        "id": "openai_responses",
-        "provider": "openai",
-        "type": "openai_responses",
-        "provider_type": "chat_completion",
-        "enable": True,
-        "key": [],
-        "api_base": "https://api.openai.com/v1",
-        "timeout": 120,
-        "model_config": {"model": "gpt-4.1-mini", "temperature": 0.4},
-        "custom_extra_body": {},
-        "custom_headers": {},
-        "modalities": ["text", "image", "tool_use"],
-        "hint": "OpenAI-compatible /v1/responses provider with built-in web_search and AstrBot/MCP tools.",
-    },
-    provider_display_name="OpenAI Responses",
 )
 class ProviderOpenAIResponses(ProviderOpenAIOfficial):
-    """OpenAI-compatible Responses API adapter.
+    """Responses API adapter for OpenAI-compatible providers.
 
-    AstrBot's agent loop is built around Chat Completions-style function calls.
-    This adapter sends Responses API payloads, keeps native web_search visible in
-    the UI, and converts Responses function_call output back into AstrBot tool
-    calls so existing local and MCP tools keep working.
+    AstrBot's normal tool loop expects Chat Completions style function calls. This
+    adapter converts those tool schemas and tool-result messages to Responses API
+    function items while still supporting native Responses tools such as
+    ``web_search``.
     """
 
     WEB_SEARCH_INCLUDE = "web_search_call.action.sources"
@@ -69,52 +55,48 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
             "sources": {
                 "type": "array",
                 "items": {"type": "object"},
-                "description": "Sources returned by the provider when available.",
+                "description": "Sources returned for the search action when available.",
             },
         },
         "additionalProperties": True,
     }
 
-    def __init__(
-        self,
-        provider_config,
-        provider_settings,
-        default_persona=None,
-    ) -> None:
-        super().__init__(provider_config, provider_settings, default_persona)
+    def __init__(self, provider_config: dict, provider_settings: dict) -> None:
+        super().__init__(provider_config, provider_settings)
         api_base = str(provider_config.get("api_base", "") or "").rstrip("/")
         self.responses_url = f"{api_base}/responses"
         self.models_url = f"{api_base}/models"
         self.headers = self._build_headers(provider_config)
-        self.http_client = httpx.AsyncClient(
-            proxy=provider_config.get("proxy") or os.environ.get("http_proxy") or None,
+        self.http_client = create_proxy_client(
+            "OpenAI Responses",
+            provider_config.get("proxy", ""),
             headers=self.headers,
-            timeout=self.timeout,
+            httpx_module=httpx,
         )
 
     @staticmethod
     def _build_headers(provider_config: dict) -> dict[str, str]:
+        custom_headers = provider_config.get("custom_headers", {})
         headers: dict[str, str] = {
             "User-Agent": "AstrBot/ResponsesAdapter",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        custom_headers = provider_config.get("custom_headers", {})
         if isinstance(custom_headers, dict):
             headers.update({str(k): str(v) for k, v in custom_headers.items()})
         return headers
 
-    def set_key(self, key):
+    def set_key(self, key) -> None:
         self.chosen_api_key = key
         self.client.api_key = key
 
     def get_current_key(self) -> str:
-        return str(self.chosen_api_key or self.client.api_key or "")
+        return str(self.chosen_api_key or "")
 
     def _headers_with_auth(self, api_key: str) -> dict[str, str]:
         return {**self.headers, "Authorization": f"Bearer {api_key}"}
 
-    async def get_models(self):
+    async def get_models(self) -> list[str]:
         try:
             resp = await self.http_client.get(
                 self.models_url,
@@ -136,10 +118,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         self,
         prompt: str | None,
         image_urls: list[str] | None = None,
-        contexts: list[dict] | None = None,
+        audio_urls: list[str] | None = None,
+        contexts: list[dict] | list[Message] | None = None,
         system_prompt: str | None = None,
         tool_calls_result: ToolCallsResult | list[ToolCallsResult] | None = None,
         model: str | None = None,
+        extra_user_content_parts: list[ContentPart] | None = None,
         func_tool: ToolSet | None = None,
         tool_choice: Literal["auto", "required"] = "auto",
         **kwargs,
@@ -147,10 +131,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         payloads, context_query = await self._prepare_chat_payload(
             prompt,
             image_urls,
+            audio_urls,
             contexts,
             system_prompt,
             tool_calls_result,
             model=model,
+            extra_user_content_parts=extra_user_content_parts,
             **kwargs,
         )
         payload = self._chat_payload_to_responses_payload(
@@ -250,6 +236,7 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
             include.append(current_include)
         elif isinstance(current_include, list):
             include.extend(str(item) for item in current_include if item)
+
         if cls.WEB_SEARCH_INCLUDE not in include:
             include.append(cls.WEB_SEARCH_INCLUDE)
         return include
@@ -439,10 +426,7 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
     def _trace_chain_for_tool_call(self, tool_call: dict) -> MessageChain:
         return MessageChain(
             type="tool_call",
-            chain=[
-                Comp.Json(data=tool_call),
-                Comp.Plain(f"🔎 {tool_call.get('name', 'tool')}"),
-            ],
+            chain=[Comp.Json(data=tool_call)],
         )
 
     def _trace_chain_for_tool_call_result(
@@ -458,15 +442,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                 Comp.Json(
                     data={
                         "id": tool_call_id,
-                        "name": result.get("name") or result.get("tool_name"),
-                        "status": result.get("status"),
                         "ts": ts or time.time(),
                         "result": json.dumps(result, ensure_ascii=False),
                         "description": result.get("description"),
                         "schema": result.get("schema"),
                     },
-                ),
-                Comp.Plain(json.dumps(result, ensure_ascii=False)),
+                )
             ],
         )
 
@@ -515,7 +496,6 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         if not isinstance(action, dict):
             action = {}
         result: dict[str, Any] = {
-            "name": "web_search",
             "status": item.get("status") or "completed",
             "action": action,
             "sources": self._extract_web_search_sources(item),
@@ -638,8 +618,6 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         item = self._stream_event_item(event)
         item_type = item.get("type")
         if event_type == "response.output_item.done" and item_type == "reasoning":
-            if reasoning_summary_keys_with_delta:
-                return trace_chains
             for text in self._extract_reasoning_summary_texts(item.get("summary")):
                 chain = self._trace_chain_for_reasoning(text)
                 if chain:
@@ -702,15 +680,8 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
             return None
         for comp in chain.chain:
             if isinstance(comp, Comp.Json):
-                data = comp.data
-                if isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except json.JSONDecodeError:
-                        return None
-                if isinstance(data, dict):
-                    tool_call_id = data.get("id")
-                    return str(tool_call_id) if tool_call_id else None
+                tool_call_id = comp.data.get("id") if isinstance(comp.data, dict) else None
+                return str(tool_call_id) if tool_call_id else None
         return None
 
     @staticmethod
@@ -735,8 +706,9 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         tool_names = []
         if isinstance(tools, list):
             for tool in tools:
-                if isinstance(tool, dict):
-                    tool_names.append(str(tool.get("name") or tool.get("type") or "?"))
+                if not isinstance(tool, dict):
+                    continue
+                tool_names.append(str(tool.get("name") or tool.get("type") or "?"))
         logger.info(
             "[OpenAI Responses] POST %s model=%s stream=%s tools=%s tool_names=%s",
             self.responses_url,
@@ -855,8 +827,10 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         payload: dict,
         api_key: str,
     ) -> AsyncGenerator[LLMResponse, None]:
+        response_id = None
         final_response: dict | None = None
         full_text_parts: list[str] = []
+        last_usage: TokenUsage | None = None
         web_search_calls: dict[str, dict] = {}
         emitted_completed_web_search_ids: set[str] = set()
         reasoning_summary_keys_with_delta: set[str] = set()
@@ -875,6 +849,10 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                 and item.get("type") == "function_call"
             ):
                 stream_output_items.append(item)
+            if response_id is None and isinstance(event.get("response"), dict):
+                response_id = event["response"].get("id")
+            if event.get("response_id"):
+                response_id = event.get("response_id")
 
             trace_chains = self._trace_chains_from_stream_event(
                 event,
@@ -887,6 +865,7 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                     "assistant",
                     trace_chains=trace_chains,
                     is_chunk=True,
+                    id=response_id,
                 )
 
             delta = self._extract_stream_delta(event)
@@ -896,6 +875,7 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                     "assistant",
                     result_chain=MessageChain(chain=[Comp.Plain(delta)]),
                     is_chunk=True,
+                    id=response_id,
                 )
 
             if event_type == "response.completed" and isinstance(
@@ -905,9 +885,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                 final_response = event["response"]
                 if stream_output_items and not final_response.get("output"):
                     final_response["output"] = stream_output_items
+                last_usage = self._extract_usage_from_responses(final_response)
                 final_trace_chains = self._trace_chains_from_response_output(
                     final_response
                 )
+            elif isinstance(event.get("usage"), dict):
+                last_usage = self._extract_usage_from_responses(event)
 
         if emitted_completed_web_search_ids and final_trace_chains:
             final_trace_chains = [
@@ -944,6 +927,8 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                     result_chain=MessageChain(chain=[Comp.Plain(text)]),
                     trace_chains=final_trace_chains,
                     raw_completion=final_response,  # type: ignore[arg-type]
+                    id=final_response.get("id") or response_id,
+                    usage=last_usage or self._extract_usage_from_responses(final_response),
                 )
                 return
             final_llm_response = self._parse_responses_response(
@@ -956,10 +941,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
 
         text = "".join(full_text_parts)
         if not text:
-            raise Exception("OpenAI Responses stream has no usable output.")
+            raise EmptyModelOutputError("OpenAI Responses stream has no usable output.")
         yield LLMResponse(
             "assistant",
             result_chain=MessageChain(chain=[Comp.Plain(text)]),
+            id=response_id,
+            usage=last_usage,
         )
 
     @staticmethod
@@ -979,8 +966,13 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
     ) -> LLMResponse:
         function_calls = self._extract_function_calls(response)
         if function_calls:
+            usage = self._extract_usage_from_responses(response)
             text = self._extract_response_text(response)
-            result_chain = MessageChain(chain=[Comp.Plain(text)]) if text else None
+            result_chain = (
+                MessageChain(chain=[Comp.Plain(text)])
+                if text
+                else None
+            )
             return LLMResponse(
                 "tool",
                 result_chain=result_chain,
@@ -991,14 +983,17 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                 tools_call_name=[call["name"] for call in function_calls],
                 tools_call_ids=[call["call_id"] for call in function_calls],
                 raw_completion=response,  # type: ignore[arg-type]
+                id=response.get("id"),
+                usage=usage,
             )
 
         text = self._extract_response_text(response)
         if not text:
             logger.error("OpenAI Responses returned no usable output: %s", response)
-            raise Exception(
+            raise EmptyModelOutputError(
                 f"OpenAI Responses returned no usable output. response_id={response.get('id')}",
             )
+        usage = self._extract_usage_from_responses(response)
         return LLMResponse(
             "assistant",
             result_chain=MessageChain(chain=[Comp.Plain(text)]),
@@ -1006,6 +1001,8 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
             if include_trace_chains
             else [],
             raw_completion=response,  # type: ignore[arg-type]
+            id=response.get("id"),
+            usage=usage,
         )
 
     def _extract_function_calls(self, response: dict) -> list[dict[str, Any]]:
@@ -1025,9 +1022,7 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                 try:
                     arguments = json.loads(raw_arguments or "{}")
                 except json.JSONDecodeError as e:
-                    logger.error(
-                        "[OpenAI Responses] failed to parse function arguments: %s", e
-                    )
+                    logger.error("[OpenAI Responses] failed to parse function arguments: %s", e)
                     arguments = {}
             elif isinstance(raw_arguments, dict):
                 arguments = raw_arguments
@@ -1070,26 +1065,47 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
                         parts.append(text)
         return "".join(parts)
 
+    @staticmethod
+    def _extract_usage_from_responses(response: dict) -> TokenUsage | None:
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        cached = 0
+        details = usage.get("input_tokens_details")
+        if isinstance(details, dict):
+            cached = int(details.get("cached_tokens") or 0)
+        return TokenUsage(
+            input_other=max(input_tokens - cached, 0),
+            input_cached=cached,
+            output=output_tokens,
+        )
+
     async def text_chat(
         self,
-        prompt,
+        prompt=None,
         session_id=None,
         image_urls=None,
+        audio_urls=None,
         func_tool=None,
         contexts=None,
         system_prompt=None,
         tool_calls_result=None,
         model=None,
+        extra_user_content_parts=None,
         tool_choice: Literal["auto", "required"] = "auto",
         **kwargs,
     ) -> LLMResponse:
         payloads, _ = await self._prepare_responses_payload(
             prompt,
             image_urls,
+            audio_urls,
             contexts,
             system_prompt,
             tool_calls_result,
             model=model,
+            extra_user_content_parts=extra_user_content_parts,
             func_tool=func_tool,
             tool_choice=tool_choice,
             **kwargs,
@@ -1097,8 +1113,6 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
 
         max_retries = 3
         available_api_keys = self.api_keys.copy()
-        if not available_api_keys:
-            raise Exception("OpenAI Responses provider missing API key.")
         last_exception = None
         for retry_cnt in range(max_retries):
             chosen_key = random.choice(available_api_keys)
@@ -1119,9 +1133,10 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
 
     async def text_chat_stream(
         self,
-        prompt,
+        prompt=None,
         session_id=None,
         image_urls=None,
+        audio_urls=None,
         func_tool=None,
         contexts=None,
         system_prompt=None,
@@ -1133,10 +1148,12 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         payloads, _ = await self._prepare_responses_payload(
             prompt,
             image_urls,
+            audio_urls,
             contexts,
             system_prompt,
             tool_calls_result,
             model=model,
+            extra_user_content_parts=kwargs.pop("extra_user_content_parts", None),
             func_tool=func_tool,
             tool_choice=tool_choice,
             **kwargs,
@@ -1144,8 +1161,6 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
 
         max_retries = 3
         available_api_keys = self.api_keys.copy()
-        if not available_api_keys:
-            raise Exception("OpenAI Responses provider missing API key.")
         last_exception = None
         for retry_cnt in range(max_retries):
             chosen_key = random.choice(available_api_keys)
@@ -1170,4 +1185,6 @@ class ProviderOpenAIResponses(ProviderOpenAIOfficial):
         raise last_exception or Exception("未知错误")
 
     async def terminate(self):
-        await self.http_client.aclose()
+        await super().terminate()
+        if self.http_client:
+            await self.http_client.aclose()

@@ -7,16 +7,22 @@ const { tm } = useModuleI18n('features/console');
 </script>
 
 <template>
-  <div style="height: 100%;">
-    <div
-      style="background-color: var(--v-theme-surface); padding: 8px; padding-left: 16px; border-radius: 8px; margin-bottom: 16px; display: flex; flex-direction: row; align-items: center; justify-content: space-between;">
-      <h4>{{ tm('title') }}</h4>
+  <div class="console-page">
+    <div class="console-header">
+      <div>
+        <h1 class="text-h2 mb-1">{{ tm('title') }}</h1>
+        <p class="text-body-2 text-medium-emphasis mb-0">
+          {{ tm('debugHint.text') }}
+        </p>
+      </div>
       <div class="d-flex align-center">
         <v-switch
-          v-model="autoScrollDisabled"
-          :label="autoScrollDisabled ? tm('autoScroll.disabled') : tm('autoScroll.enabled')"
+          v-model="autoScrollEnabled"
+          :label="autoScrollEnabled ? tm('autoScroll.enabled') : tm('autoScroll.disabled')"
           hide-details
           density="compact"
+          inset
+          color="primary"
           style="margin-right: 16px;"
         ></v-switch>
         <v-dialog v-model="pipDialog" width="400">
@@ -46,7 +52,7 @@ const { tm } = useModuleI18n('features/console');
         </v-dialog>
       </div>
     </div>
-    <ConsoleDisplayer ref="consoleDisplayer" style="height: calc(100vh - 220px); " />
+    <ConsoleDisplayer ref="consoleDisplayer" class="console-display" />
   </div>
 </template>
 <script>
@@ -57,7 +63,7 @@ export default {
   },
   data() {
     return {
-      autoScrollDisabled: false,
+      autoScrollEnabled: localStorage.getItem('console_auto_scroll') !== 'false',
       pipDialog: false,
       pipInstallPayload: {
         package: '',
@@ -67,10 +73,16 @@ export default {
       status: ''
     }
   },
+  mounted() {
+    if (this.$refs.consoleDisplayer) {
+      this.$refs.consoleDisplayer.autoScroll = this.autoScrollEnabled;
+    }
+  },
   watch: {
-    autoScrollDisabled(val) {
+    autoScrollEnabled(val) {
+      localStorage.setItem('console_auto_scroll', val);
       if (this.$refs.consoleDisplayer) {
-        this.$refs.consoleDisplayer.autoScroll = !val;
+        this.$refs.consoleDisplayer.autoScroll = val;
       }
     }
   },
@@ -96,7 +108,27 @@ export default {
 
 </script>
 
-<style>
+<style scoped>
+.console-page {
+  height: 100%;
+  margin: 0 auto;
+  max-width: 1400px;
+  padding: 24px;
+  width: 100%;
+}
+
+.console-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.console-display {
+  height: calc(100vh - 190px);
+  width: 100%;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -109,5 +141,16 @@ export default {
 
 .fade-in {
   animation: fadeIn 0.2s ease-in-out;
+}
+
+@media (max-width: 768px) {
+  .console-page {
+    padding: 16px;
+  }
+
+  .console-header {
+    flex-direction: column;
+    gap: 12px;
+  }
 }
 </style>

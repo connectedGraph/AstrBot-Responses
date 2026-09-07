@@ -1,19 +1,18 @@
-import aiohttp
 import asyncio
 import random
-import astrbot.api.star as star
-import astrbot.api.event.filter as filter
-from astrbot.api.event import AstrMessageEvent, MessageEventResult
+
+import aiohttp
+from bs4 import BeautifulSoup
+from readability import Document
+
+from astrbot.api import AstrBotConfig, llm_tool, logger, star
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.provider import ProviderRequest
-from astrbot.api import llm_tool, logger, AstrBotConfig
 from astrbot.core.provider.func_tool_manager import FunctionToolManager
-from .engines import SearchResult
+
+from .engines import HEADERS, USER_AGENTS, SearchResult
 from .engines.bing import Bing
 from .engines.sogo import Sogo
-from .engines.google import Google
-from readability import Document
-from bs4 import BeautifulSoup
-from .engines import HEADERS, USER_AGENTS
 
 
 class Main(star.Star):
@@ -36,7 +35,7 @@ class Main(star.Star):
             tavily_key = provider_settings.get("websearch_tavily_key")
             if isinstance(tavily_key, str):
                 logger.info(
-                    "检测到旧版 websearch_tavily_key (字符串格式)，自动迁移为列表格式并保存。"
+                    "检测到旧版 websearch_tavily_key (字符串格式)，自动迁移为列表格式并保存。",
                 )
                 if tavily_key:
                     provider_settings["websearch_tavily_key"] = [tavily_key]
@@ -46,7 +45,7 @@ class Main(star.Star):
 
         self.bing_search = Bing()
         self.sogo_search = Sogo()
-        self.google = Google()
+        self.baidu_initialized = False
 
     async def _tidy_text(self, text: str) -> str:
         """清理文本，去除空格、换行符等"""
@@ -66,7 +65,10 @@ class Main(star.Star):
                 return ret
 
     async def _process_search_result(
-        self, result: SearchResult, idx: int, websearch_link: bool
+        self,
+        result: SearchResult,
+        idx: int,
+        websearch_link: bool,
     ) -> str:
         """处理单个搜索结果"""
         logger.info(f"web_searcher - scraping web: {result.title} - {result.url}")
@@ -86,19 +88,15 @@ class Main(star.Star):
         return f"{header}\n{result.snippet}\n{site_result}\n\n"
 
     async def _web_search_default(
-        self, query, num_results: int = 5
+        self,
+        query,
+        num_results: int = 5,
     ) -> list[SearchResult]:
         results = []
         try:
-            results = await self.google.search(query, num_results)
+            results = await self.bing_search.search(query, num_results)
         except Exception as e:
-            logger.error(f"google search error: {e}, try the next one...")
-        if len(results) == 0:
-            logger.debug("search google failed")
-            try:
-                results = await self.bing_search.search(query, num_results)
-            except Exception as e:
-                logger.error(f"bing search error: {e}, try the next one...")
+            logger.error(f"bing search error: {e}, try the next one...")
         if len(results) == 0:
             logger.debug("search bing failed")
             try:
@@ -123,7 +121,9 @@ class Main(star.Star):
             return key
 
     async def _web_search_tavily(
-        self, cfg: AstrBotConfig, payload: dict
+        self,
+        cfg: AstrBotConfig,
+        payload: dict,
     ) -> list[SearchResult]:
         """使用 Tavily 搜索引擎进行搜索"""
         tavily_key = await self._get_tavily_key(cfg)
@@ -134,12 +134,15 @@ class Main(star.Star):
         }
         async with aiohttp.ClientSession(trust_env=True) as session:
             async with session.post(
-                url, json=payload, headers=header, timeout=6
+                url,
+                json=payload,
+                headers=header,
+                timeout=6,
             ) as response:
                 if response.status != 200:
                     reason = await response.text()
                     raise Exception(
-                        f"Tavily web search failed: {reason}, status: {response.status}"
+                        f"Tavily web search failed: {reason}, status: {response.status}",
                     )
                 data = await response.json()
                 results = []
@@ -162,18 +165,21 @@ class Main(star.Star):
         }
         async with aiohttp.ClientSession(trust_env=True) as session:
             async with session.post(
-                url, json=payload, headers=header, timeout=6
+                url,
+                json=payload,
+                headers=header,
+                timeout=6,
             ) as response:
                 if response.status != 200:
                     reason = await response.text()
                     raise Exception(
-                        f"Tavily web search failed: {reason}, status: {response.status}"
+                        f"Tavily web search failed: {reason}, status: {response.status}",
                     )
                 data = await response.json()
                 results: list[dict] = data.get("results", [])
                 if not results:
                     raise ValueError(
-                        "Error: Tavily web searcher does not return any results."
+                        "Error: Tavily web searcher does not return any results.",
                     )
                 return results
 
@@ -181,19 +187,23 @@ class Main(star.Star):
     async def websearch(self, event: AstrMessageEvent, oper: str | None = None):
         event.set_result(
             MessageEventResult().message(
-                "此指令已经被废弃，请在 WebUI 中开启或关闭网页搜索功能。"
-            )
+                "此指令已经被废弃，请在 WebUI 中开启或关闭网页搜索功能。",
+            ),
         )
 
     @llm_tool(name="web_search")
     async def search_from_search_engine(
-        self, event: AstrMessageEvent, query: str, max_results: int = 5
+        self,
+        event: AstrMessageEvent,
+        query: str,
+        max_results: int = 5,
     ) -> str:
         """搜索网络以回答用户的问题。当用户需要搜索网络以获取即时性的信息时调用此工具。
 
         Args:
             query(string): 和用户的问题最相关的搜索关键词，用于在 Google 上搜索。
             max_results(number): 返回的最大搜索结果数量，默认为 5。
+
         """
         logger.info(f"web_searcher - search_from_search_engine: {query}")
         cfg = self.context.get_config(umo=event.unified_msg_origin)
@@ -220,12 +230,38 @@ class Main(star.Star):
 
         return ret
 
+    async def ensure_baidu_ai_search_mcp(self, umo: str | None = None):
+        if self.baidu_initialized:
+            return
+        cfg = self.context.get_config(umo=umo)
+        key = cfg.get("provider_settings", {}).get(
+            "websearch_baidu_app_builder_key",
+            "",
+        )
+        if not key:
+            raise ValueError(
+                "Error: Baidu AI Search API key is not configured in AstrBot.",
+            )
+        func_tool_mgr = self.context.get_llm_tool_manager()
+        await func_tool_mgr.enable_mcp_server(
+            "baidu_ai_search",
+            config={
+                "transport": "sse",
+                "url": f"http://appbuilder.baidu.com/v2/ai_search/mcp/sse?api_key={key}",
+                "headers": {},
+                "timeout": 30,
+            },
+        )
+        self.baidu_initialized = True
+        logger.info("Successfully initialized Baidu AI Search MCP server.")
+
     @llm_tool(name="fetch_url")
     async def fetch_website_content(self, event: AstrMessageEvent, url: str) -> str:
-        """fetch the content of a website with the given web url
+        """Fetch the content of a website with the given web url
 
         Args:
             url(string): The url of the website to fetch content from
+
         """
         resp = await self._get_from_url(url)
         return resp
@@ -255,6 +291,7 @@ class Main(star.Star):
             time_range(string): Optional. The time range back from the current date to include in the search results. This feature is available for both 'general' and 'news' search topics. Must be one of 'day', 'week', 'month', 'year'.
             start_date(string): Optional. The start date for the search results in the format 'YYYY-MM-DD'.
             end_date(string): Optional. The end date for the search results in the format 'YYYY-MM-DD'.
+
         """
         logger.info(f"web_searcher - search_from_tavily: {query}")
         cfg = self.context.get_config(umo=event.unified_msg_origin)
@@ -302,13 +339,17 @@ class Main(star.Star):
 
     @llm_tool("tavily_extract_web_page")
     async def tavily_extract_web_page(
-        self, event: AstrMessageEvent, url: str = "", extract_depth: str = "basic"
+        self,
+        event: AstrMessageEvent,
+        url: str = "",
+        extract_depth: str = "basic",
     ) -> str:
         """Extract the content of a web page using Tavily.
 
         Args:
             url(string): Required. An URl to extract content from.
             extract_depth(string): Optional. The depth of the extraction, must be one of 'basic', 'advanced'. Default is "basic".
+
         """
         cfg = self.context.get_config(umo=event.unified_msg_origin)
         if not cfg.get("provider_settings", {}).get("websearch_tavily_key", []):
@@ -334,7 +375,9 @@ class Main(star.Star):
 
     @filter.on_llm_request(priority=-10000)
     async def edit_web_search_tools(
-        self, event: AstrMessageEvent, req: ProviderRequest
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
     ):
         """Get the session conversation for the given event."""
         cfg = self.context.get_config(umo=event.unified_msg_origin)
@@ -366,6 +409,7 @@ class Main(star.Star):
                 tool_set.add_tool(fetch_url_t)
             tool_set.remove_tool("web_search_tavily")
             tool_set.remove_tool("tavily_extract_web_page")
+            tool_set.remove_tool("AIsearch")
         elif provider == "tavily":
             web_search_tavily = func_tool_mgr.get_func("web_search_tavily")
             tavily_extract_web_page = func_tool_mgr.get_func("tavily_extract_web_page")
@@ -375,3 +419,17 @@ class Main(star.Star):
                 tool_set.add_tool(tavily_extract_web_page)
             tool_set.remove_tool("web_search")
             tool_set.remove_tool("fetch_url")
+            tool_set.remove_tool("AIsearch")
+        elif provider == "baidu_ai_search":
+            try:
+                await self.ensure_baidu_ai_search_mcp(event.unified_msg_origin)
+                aisearch_tool = func_tool_mgr.get_func("AIsearch")
+                if not aisearch_tool:
+                    raise ValueError("Cannot get Baidu AI Search MCP tool.")
+                tool_set.add_tool(aisearch_tool)
+                tool_set.remove_tool("web_search")
+                tool_set.remove_tool("fetch_url")
+                tool_set.remove_tool("web_search_tavily")
+                tool_set.remove_tool("tavily_extract_web_page")
+            except Exception as e:
+                logger.error(f"Cannot Initialize Baidu AI Search MCP Server: {e}")

